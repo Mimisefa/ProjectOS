@@ -1,0 +1,17 @@
+# Executabilul compilat
+city_manager
+
+# Fisiere obiect
+*.o
+
+# Fisiere temporare de editor
+*.swp
+*~
+
+# Datele generate de program la rulare
+downtown/
+*/reports.dat
+*/district.cfg
+*/logged_district
+active_reports-*
+.monitor_pid
