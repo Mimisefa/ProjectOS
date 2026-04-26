@@ -1,8 +1,0 @@
-=== Argumente parsate ===
-Rol: inspector
-User: bob
-District: downtown
-Comanda: filter
-Conditii (2):
-  [0] severity:
-  [1] category:==road
