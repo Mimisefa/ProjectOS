@@ -425,6 +425,44 @@ int cmd_list(Args *args) {
 
     return 0;
 }
+/* ==========================================
+ * cmd_view - afiseaza un raport specific dupa ID
+ * ========================================== */
+int cmd_view(Args *args) {
+    char path[256];
+    snprintf(path, sizeof(path), "%s/reports.dat", args->district);
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        perror("open reports.dat");
+        return -1;
+    }
+
+    Report r;
+    int found = 0;
+    while (read(fd, &r, sizeof(Report)) == sizeof(Report)) {
+        if (r.id == args->report_id) {
+            print_report(&r);
+            found = 1;
+            break;
+        }
+    }
+    close(fd);
+
+    if (!found) {
+        fprintf(stderr, "Eroare: nu exista raport cu ID %d in districtul %s\n",
+                args->report_id, args->district);
+        return -1;
+    }
+
+    char action[64];
+    snprintf(action, sizeof(action), "view report id=%d", args->report_id);
+    write_log(args->district,
+              args->role == ROLE_MANAGER ? "manager" : "inspector",
+              args->user, action);
+
+    return 0;
+}
 int main(int argc, char *argv[]) {
     Args args;
 
@@ -442,6 +480,8 @@ int main(int argc, char *argv[]) {
             rc = cmd_list(&args);
             break;
         case CMD_VIEW:
+            rc=cmd_view(&args);
+            break;
         case CMD_REMOVE_REPORT:
         case CMD_UPDATE_THRESHOLD:
         case CMD_FILTER:
