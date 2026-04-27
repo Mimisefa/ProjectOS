@@ -189,6 +189,99 @@ int check_permissions(const char *path, int role, char access_mode) {
     }
 
     return 0;
+}/* ==========================================
+ * #define pentru parse_condition (generat cu AI)
+ * ========================================== */
+#define MAX_PART_LEN 64
+
+/* ==========================================
+ * parse_condition - generata cu AI (vezi ai_usage.md)
+ * Sparge un string "field:operator:value" in 3 parti.
+ * Returneaza 0 la succes, -1 la eroare.
+ * ========================================== */
+int parse_condition(const char *input, char *field, char *op, char *value) {
+    if (input == NULL || field == NULL || op == NULL || value == NULL) {
+        return -1;
+    }
+    /* Primul ':' */
+    const char *c1 = strchr(input, ':');
+    if (c1 == NULL || c1 == input) {
+        return -1;
+    }
+    /* Al doilea ':' */
+    const char *c2 = strchr(c1 + 1, ':');
+    if (c2 == NULL || c2 == c1 + 1) {
+        return -1;
+    }
+    /* Nu trebuie sa existe un al treilea ':' */
+    if (strchr(c2 + 1, ':') != NULL) {
+        return -1;
+    }
+    size_t field_len = (size_t)(c1 - input);
+    size_t op_len    = (size_t)(c2 - c1 - 1);
+    size_t value_len = strlen(c2 + 1);
+    if (field_len == 0 || field_len > MAX_PART_LEN) return -1;
+    if (op_len    == 0 || op_len    > MAX_PART_LEN) return -1;
+    if (value_len == 0 || value_len > MAX_PART_LEN) return -1;
+    memcpy(field, input,    field_len); field[field_len] = '\0';
+    memcpy(op,    c1 + 1,   op_len);    op[op_len]       = '\0';
+    memcpy(value, c2 + 1,   value_len); value[value_len] = '\0';
+    /* Validare operator */
+    if (!(strcmp(op, "==") == 0 ||
+          strcmp(op, "!=") == 0 ||
+          strcmp(op, "<")  == 0 ||
+          strcmp(op, "<=") == 0 ||
+          strcmp(op, ">")  == 0 ||
+          strcmp(op, ">=") == 0)) {
+        return -1;
+    }
+    return 0;
+}
+
+/* ==========================================
+ * eval_op - helper pentru match_condition
+ * sign < 0 => a<b ; sign == 0 => a==b ; sign > 0 => a>b
+ * ========================================== */
+static int eval_op(int sign, const char *op) {
+    if (strcmp(op, "==") == 0) return sign == 0;
+    if (strcmp(op, "!=") == 0) return sign != 0;
+    if (strcmp(op, "<")  == 0) return sign <  0;
+    if (strcmp(op, "<=") == 0) return sign <= 0;
+    if (strcmp(op, ">")  == 0) return sign >  0;
+    if (strcmp(op, ">=") == 0) return sign >= 0;
+    return 0;
+}
+
+/* ==========================================
+ * match_condition - generata cu AI (vezi ai_usage.md)
+ * Returneaza 1 daca raportul *r satisface conditia "field op value", 0 altfel.
+ * ========================================== */
+int match_condition(Report *r, const char *field, const char *op, const char *value) {
+    if (r == NULL || field == NULL || op == NULL || value == NULL) {
+        return 0;
+    }
+    int sign;
+    if (strcmp(field, "severity") == 0) {
+        int v = atoi(value);
+        sign = (r->severity > v) - (r->severity < v);
+    }
+    else if (strcmp(field, "timestamp") == 0) {
+        long v  = atol(value);
+        long ts = (long)r->timestamp;
+        sign = (ts > v) - (ts < v);
+    }
+    else if (strcmp(field, "category") == 0) {
+        int cmp = strcmp(r->category, value);
+        sign = (cmp > 0) - (cmp < 0);
+    }
+    else if (strcmp(field, "inspector") == 0) {
+        int cmp = strcmp(r->inspector, value);
+        sign = (cmp > 0) - (cmp < 0);
+    }
+    else {
+        return 0;
+    }
+    return eval_op(sign, op);
 }
 
 /* ==========================================
@@ -616,6 +709,91 @@ int cmd_update_threshold(Args *args) {
     write_log(args->district, "manager", args->user, action);
     return 0;
 }
+/* ==========================================
+ * cmd_filter - SCRISA DE MINE (foloseste parse_condition si match_condition)
+ *
+ * Algoritm:
+ * 1. Parseaza fiecare conditie din linia de comanda cu parse_condition
+ * 2. Pentru fiecare raport din reports.dat:
+ *      Pentru fiecare conditie:
+ *          Daca match_condition returneaza 0 -> raportul nu trece, sarim la urmatorul
+ *      Daca toate conditiile au returnat 1 -> afisam raportul
+ * ========================================== */
+int cmd_filter(Args *args) {
+    char path[256];
+    snprintf(path, sizeof(path), "%s/reports.dat", args->district);
+
+    /* Verificare permisiuni: ambele roluri pot citi reports.dat */
+    if (check_permissions(path, args->role, 'r') < 0) return -1;
+
+    /* Pregatim conditiile parsate */
+    typedef struct {
+        char field[MAX_PART_LEN + 1];
+        char op[MAX_PART_LEN + 1];
+        char value[MAX_PART_LEN + 1];
+    } ParsedCondition;
+
+    ParsedCondition parsed[10];
+    int parsed_count = 0;
+
+    for (int i = 0; i < args->filter_count; i++) {
+        if (parse_condition(args->filter_conditions[i],
+                            parsed[i].field,
+                            parsed[i].op,
+                            parsed[i].value) < 0) {
+            fprintf(stderr, "Eroare: conditie invalida '%s'\n",
+                    args->filter_conditions[i]);
+            return -1;
+        }
+        printf("Conditie [%d]: field='%s' op='%s' value='%s'\n",
+               i, parsed[i].field, parsed[i].op, parsed[i].value);
+        parsed_count++;
+    }
+
+    /* Deschidem reports.dat si parcurgem raport cu raport */
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        perror("open reports.dat");
+        return -1;
+    }
+
+    Report r;
+    int matched = 0;
+    int total = 0;
+
+    printf("\n=== Rapoarte care satisfac toate conditiile ===\n");
+
+    while (read(fd, &r, sizeof(Report)) == sizeof(Report)) {
+        total++;
+        int passes_all = 1;  /* presupunem ca trece, daca esueaza vreuna -> 0 */
+
+        for (int i = 0; i < parsed_count; i++) {
+            if (!match_condition(&r, parsed[i].field, parsed[i].op, parsed[i].value)) {
+                passes_all = 0;
+                break;  /* AND logic - opreste la prima conditie nesatisfacuta */
+            }
+        }
+
+        if (passes_all) {
+            print_report(&r);
+            matched++;
+        }
+    }
+    close(fd);
+
+    printf("\nGasite %d rapoarte (din %d) care satisfac toate cele %d conditii.\n",
+           matched, total, parsed_count);
+
+    /* Logam actiunea */
+    char action[128];
+    snprintf(action, sizeof(action), "filter (%d conditions, %d matches)",
+             parsed_count, matched);
+    write_log(args->district,
+              args->role == ROLE_MANAGER ? "manager" : "inspector",
+              args->user, action);
+
+    return 0;
+}
 
 /* ==========================================
  * MAIN
@@ -635,7 +813,7 @@ int main(int argc, char *argv[]) {
         case CMD_VIEW:              rc = cmd_view(&args); break;
         case CMD_REMOVE_REPORT:     rc = cmd_remove_report(&args); break;
         case CMD_UPDATE_THRESHOLD:  rc = cmd_update_threshold(&args); break;
-        case CMD_FILTER:
+        case CMD_FILTER:            rc=cmd_filter(&args); break;
             printf("Comanda --filter va fi implementata cu AI in pasul urmator.\n");
             break;
     }
