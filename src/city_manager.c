@@ -57,6 +57,7 @@ typedef struct {
 /* ==========================================
  * print_usage
  * ========================================== */
+ void scan_symlinks(void);
 void print_usage(const char *prog_name) {
     fprintf(stderr,
         "Utilizare: %s --role <inspector|manager> --user <name> --<command> [args]\n",
@@ -532,6 +533,7 @@ int cmd_list(Args *args) {
     write_log(args->district,
               args->role == ROLE_MANAGER ? "manager" : "inspector",
               args->user, "list");
+    scan_symlinks();
     return 0;
 }
 
@@ -794,7 +796,69 @@ int cmd_filter(Args *args) {
 
     return 0;
 }
+/* ==========================================
+ * scan_symlinks - scaneaza directorul curent si verifica symlink-urile
+ * "active_reports-*". Detecteaza si raporteaza link-urile rupte.
+ *
+ * Foloseste lstat() (nu stat()) ca sa identifice symlink-urile FARA
+ * sa le urmeze. Apoi verifica daca tinta lor exista cu stat().
+ * ========================================== */
+void scan_symlinks(void) {
+    DIR *dir = opendir(".");
+    if (dir == NULL) {
+        perror("opendir");
+        return;
+    }
 
+    struct dirent *entry;
+    int total_links = 0;
+    int broken_links = 0;
+
+    printf("\n=== Scanare symlink-uri active_reports-* ===\n");
+
+    while ((entry = readdir(dir)) != NULL) {
+        /* Filtram doar fisierele care incep cu "active_reports-" */
+        if (strncmp(entry->d_name, "active_reports-", 15) != 0) {
+            continue;
+        }
+
+        struct stat lst;
+        /* lstat ne arata daca e symlink (NU urmeaza link-ul) */
+        if (lstat(entry->d_name, &lst) < 0) {
+            fprintf(stderr, "  AVERTISMENT: nu pot lstat '%s'\n", entry->d_name);
+            continue;
+        }
+
+        /* Verificam ca e intr-adevar symlink */
+        if (!S_ISLNK(lst.st_mode)) {
+            printf("  '%s' NU este un symlink (?)\n", entry->d_name);
+            continue;
+        }
+
+        total_links++;
+
+        /* stat (NU lstat!) verifica daca tinta exista */
+        struct stat target_st;
+        if (stat(entry->d_name, &target_st) < 0) {
+            /* Linkul exista, dar tinta nu - link rupt */
+            char target[256];
+            ssize_t len = readlink(entry->d_name, target, sizeof(target) - 1);
+            if (len > 0) target[len] = '\0';
+            else strcpy(target, "(necunoscut)");
+
+            fprintf(stderr, "  LINK RUPT: '%s' -> '%s' (tinta nu exista)\n",
+                    entry->d_name, target);
+            broken_links++;
+        } else {
+            printf("  OK: '%s' (tinta: %ld bytes)\n",
+                   entry->d_name, (long)target_st.st_size);
+        }
+    }
+
+    closedir(dir);
+
+    printf("\nTotal symlink-uri: %d, rupte: %d\n", total_links, broken_links);
+}
 /* ==========================================
  * MAIN
  * ========================================== */
