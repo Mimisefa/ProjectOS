@@ -463,6 +463,206 @@ int cmd_view(Args *args) {
 
     return 0;
 }
+/* ==========================================
+ * cmd_remove_report - sterge un raport (MANAGER ONLY)
+ *
+ * Algoritm:
+ * 1. Cauta pozitia raportului cu ID-ul cerut
+ * 2. Pentru fiecare raport DUPA acea pozitie: il muta cu o pozitie inapoi
+ *    folosind lseek + read + lseek + write
+ * 3. Taie fisierul cu sizeof(Report) bytes folosind ftruncate
+ * ========================================== */
+int cmd_remove_report(Args *args) {
+    /* 1. Verificare rol - doar manager are voie sa stearga */
+    if (args->role != ROLE_MANAGER) {
+        fprintf(stderr, "Eroare: doar managerul poate sterge rapoarte\n");
+        return -1;
+    }
+
+    char path[256];
+    snprintf(path, sizeof(path), "%s/reports.dat", args->district);
+
+    /* 2. stat() ca sa verificam marimea INAINTE de operatie */
+    struct stat st_before;
+    if (stat(path, &st_before) < 0) {
+        perror("stat reports.dat");
+        return -1;
+    }
+    off_t size_before = st_before.st_size;
+    int total_records = size_before / sizeof(Report);
+
+    if (total_records == 0) {
+        fprintf(stderr, "Eroare: districtul %s nu are rapoarte\n", args->district);
+        return -1;
+    }
+
+    /* 3. Deschidem fisierul in mod RW (citire + scriere) */
+    int fd = open(path, O_RDWR);
+    if (fd < 0) {
+        perror("open reports.dat");
+        return -1;
+    }
+
+    /* 4. Cautam pozitia raportului cu ID-ul cerut */
+    Report r;
+    int found_index = -1;
+
+    for (int i = 0; i < total_records; i++) {
+        if (lseek(fd, (off_t)i * sizeof(Report), SEEK_SET) < 0) {
+            perror("lseek search");
+            close(fd);
+            return -1;
+        }
+        if (read(fd, &r, sizeof(Report)) != sizeof(Report)) {
+            perror("read search");
+            close(fd);
+            return -1;
+        }
+        if (r.id == args->report_id) {
+            found_index = i;
+            break;
+        }
+    }
+
+    if (found_index < 0) {
+        fprintf(stderr, "Eroare: nu exista raport cu ID %d\n", args->report_id);
+        close(fd);
+        return -1;
+    }
+
+    printf("Raportul cu ID %d e la pozitia %d (din %d).\n",
+           args->report_id, found_index, total_records);
+    printf("Marime fisier INAINTE: %ld bytes (%d rapoarte)\n",
+           (long)size_before, total_records);
+
+    /* 5. Shift: pentru fiecare raport DUPA found_index, il mutam cu o pozitie inapoi */
+    for (int i = found_index + 1; i < total_records; i++) {
+        /* Citim de la pozitia i */
+        if (lseek(fd, (off_t)i * sizeof(Report), SEEK_SET) < 0) {
+            perror("lseek shift read");
+            close(fd);
+            return -1;
+        }
+        if (read(fd, &r, sizeof(Report)) != sizeof(Report)) {
+            perror("read shift");
+            close(fd);
+            return -1;
+        }
+
+        /* Scriem la pozitia i-1 (peste raportul anterior) */
+        if (lseek(fd, (off_t)(i - 1) * sizeof(Report), SEEK_SET) < 0) {
+            perror("lseek shift write");
+            close(fd);
+            return -1;
+        }
+        if (write(fd, &r, sizeof(Report)) != sizeof(Report)) {
+            perror("write shift");
+            close(fd);
+            return -1;
+        }
+    }
+
+    /* 6. Taiem fisierul cu sizeof(Report) bytes (eliminam duplicatul de la final) */
+    off_t new_size = size_before - sizeof(Report);
+    if (ftruncate(fd, new_size) < 0) {
+        perror("ftruncate");
+        close(fd);
+        return -1;
+    }
+    close(fd);
+
+    /* 7. Verificam marimea DUPA operatie */
+    struct stat st_after;
+    if (stat(path, &st_after) == 0) {
+        printf("Marime fisier DUPA  : %ld bytes (%ld rapoarte)\n",
+               (long)st_after.st_size,
+               (long)(st_after.st_size / sizeof(Report)));
+    }
+
+    printf("Raport %d sters cu succes.\n", args->report_id);
+
+    /* 8. Logam actiunea */
+    char action[64];
+    snprintf(action, sizeof(action), "remove report id=%d", args->report_id);
+    write_log(args->district, "manager", args->user, action);
+
+    return 0;
+}
+/* ==========================================
+ * cmd_update_threshold - modifica severity_threshold in district.cfg
+ * MANAGER ONLY + verificare stricta a permisiunilor (640)
+ * ========================================== */
+int cmd_update_threshold(Args *args) {
+    /* 1. Verificare rol */
+    if (args->role != ROLE_MANAGER) {
+        fprintf(stderr, "Eroare: doar managerul poate modifica threshold-ul\n");
+        return -1;
+    }
+
+    char path[256];
+    snprintf(path, sizeof(path), "%s/district.cfg", args->district);
+
+    /* 2. Verificare permisiuni - trebuie sa fie EXACT 640 (rw-r-----)
+     * Daca cineva le-a schimbat, refuzam si printam diagnostic.
+     *
+     * Folosim & 0777 ca sa luam doar bitii de permisiune (ignoram tipul de fisier).
+     */
+    struct stat st;
+    if (stat(path, &st) < 0) {
+        perror("stat district.cfg");
+        return -1;
+    }
+
+    mode_t actual_perms = st.st_mode & 0777;
+    mode_t expected_perms = 0640;
+
+    if (actual_perms != expected_perms) {
+        fprintf(stderr,
+            "Eroare: permisiunile lui district.cfg sunt %03o, asteptam %03o (640).\n"
+            "        Refuz sa scriu intr-un fisier cu permisiuni modificate.\n",
+            actual_perms, expected_perms);
+        return -1;
+    }
+
+    /* 3. Validare valoare threshold */
+    int new_val = args->threshold_value;
+    if (new_val < 1 || new_val > 3) {
+        fprintf(stderr, "Eroare: threshold trebuie sa fie 1, 2 sau 3 (a fost %d)\n",
+                new_val);
+        return -1;
+    }
+
+    /* 4. Suprascriem fisierul cu noua valoare
+     * O_TRUNC = trunchiaza fisierul la 0 inainte de scriere (sterge continutul vechi)
+     */
+    int fd = open(path, O_WRONLY | O_TRUNC);
+    if (fd < 0) {
+        perror("open district.cfg");
+        return -1;
+    }
+
+    char line[64];
+    int len = snprintf(line, sizeof(line), "severity_threshold=%d\n", new_val);
+
+    if (write(fd, line, len) != len) {
+        perror("write district.cfg");
+        close(fd);
+        return -1;
+    }
+    close(fd);
+
+    /* 5. Re-aplicam permisiunile 640 (in caz ca ceva le-a schimbat) */
+    chmod(path, 0640);
+
+    printf("Threshold actualizat la %d in %s\n", new_val, path);
+
+    /* 6. Logam actiunea */
+    char action[64];
+    snprintf(action, sizeof(action), "update_threshold value=%d", new_val);
+    write_log(args->district, "manager", args->user, action);
+
+    return 0;
+}
 int main(int argc, char *argv[]) {
     Args args;
 
@@ -483,7 +683,12 @@ int main(int argc, char *argv[]) {
             rc=cmd_view(&args);
             break;
         case CMD_REMOVE_REPORT:
+        rc=cmd_remove_report(&args);
+            break;
+
         case CMD_UPDATE_THRESHOLD:
+        rc=cmd_update_threshold(&args);
+            break;
         case CMD_FILTER:
             printf("Comanda nu e inca implementata.\n");
             break;
