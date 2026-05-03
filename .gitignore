@@ -15,3 +15,7 @@ downtown/
 */logged_district
 active_reports-*
 .monitor_pid
+
+# Phase 2 - executabil monitor
+monitor_reports
+.monitor_pid

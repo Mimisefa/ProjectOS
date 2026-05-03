@@ -99,3 +99,24 @@ Detalii complete despre prompt-uri, codul generat si evaluarea critica se gasesc
 - **Metadata:** stat, lstat, chmod
 - **Directoare:** mkdir, opendir, readdir, closedir
 - **Link-uri:** symlink, readlink, unlink
+
+---
+
+## Phase 2: Processes and Signals (in progres)
+
+Modificari planificate fata de Phase 1:
+
+- Comanda noua `--remove_district <district_id>` (manager only):
+  - Foloseste `fork()` + `execlp("rm", "rm", "-rf", ...)` pentru stergere
+  - Sterge si symlink-ul corespunzator
+- Program nou `monitor_reports`:
+  - Scrie PID in `.monitor_pid` la startup, sterge la iesire
+  - Raspunde la `SIGUSR1` (raport nou) si `SIGINT` (terminare)
+  - Foloseste `sigaction()` (NU `signal()`)
+- Modificare comanda `--add` din city_manager:
+  - Notifica monitorul cu `kill(pid, SIGUSR1)` cand se adauga raport
+  - Logheaza in `logged_district` daca notificarea a reusit sau nu
+
+Compilare Phase 2:
+gcc -Wall -o city_manager src/city_manager.c
+gcc -Wall -o monitor_reports src/monitor_reports.c
