@@ -10,7 +10,6 @@
 #include <fcntl.h>      /* open, O_RDONLY, O_WRONLY, O_CREAT, O_APPEND, O_TRUNC, O_RDWR */
 #include <sys/stat.h>   /* stat, lstat, mkdir, chmod, S_IRUSR, etc. */
 #include <sys/types.h>
-#include <sys/wait.h>
 #include <time.h>       /* time_t, time(), localtime(), strftime() */
 #include <dirent.h>
 #include <errno.h>
@@ -43,7 +42,6 @@ typedef struct {
 #define CMD_REMOVE_REPORT    4
 #define CMD_UPDATE_THRESHOLD 5
 #define CMD_FILTER           6
-#define CMD_REMOVE_DISTRICT  7
 
 typedef struct {
     int   role;
@@ -118,12 +116,6 @@ int parse_args(int argc, char *argv[], Args *args) {
             strncpy(args->district, argv[i + 1], sizeof(args->district) - 1);
             args->threshold_value = atoi(argv[i + 2]);
             i += 3;
-        }
-        else if (strcmp(argv[i], "--remove_district") == 0) {
-            if (i + 1 >= argc) return -1;
-            args->command = CMD_REMOVE_DISTRICT;
-            strncpy(args->district, argv[i + 1], sizeof(args->district) - 1);
-            i += 2;
         }
         else if (strcmp(argv[i], "--filter") == 0) {
             if (i + 2 >= argc) return -1;
@@ -870,107 +862,6 @@ void scan_symlinks(void) {
 /* ==========================================
  * MAIN
  * ========================================== */
-/* ==========================================
- * is_safe_district_name - validare stricta a numelui districtului
- * REFUZAM nume care contin: '/', '..', '\0', sau care sunt vide.
- * Fara aceasta verificare, un atacator ar putea face --remove_district "/"
- * si ar sterge tot sistemul de fisiere!
- * ========================================== */
-int is_safe_district_name(const char *name) {
-    if (name == NULL || name[0] == '\0') return 0;
-    if (name[0] == '/') return 0;          /* path absolut - refuzat */
-    if (name[0] == '-') return 0;          /* poate fi interpretat ca optiune */
-    if (strstr(name, "..") != NULL) return 0;  /* path traversal - refuzat */
-    if (strchr(name, '/') != NULL) return 0;   /* nume cu slash - refuzat */
-    if (strlen(name) > 63) return 0;       /* prea lung */
-    return 1;
-}
-
-/* ==========================================
- * cmd_remove_district - sterge intreg directorul districtului
- * MANAGER ONLY. Foloseste fork() + execlp("rm", "-rf", path).
- * Sterge si symlink-ul active_reports-<district>.
- *
- * Validare stricta a numelui districtului inainte de rm -rf
- * pentru a preveni accidente catastrofale.
- * ========================================== */
-int cmd_remove_district(Args *args) {
-    /* 1. Verificare rol */
-    if (args->role != ROLE_MANAGER) {
-        fprintf(stderr, "Eroare: doar managerul poate sterge un district\n");
-        return -1;
-    }
-
-    /* 2. VALIDARE STRICTA a numelui (foarte important pentru rm -rf!) */
-    if (!is_safe_district_name(args->district)) {
-        fprintf(stderr, "Eroare: nume district invalid sau periculos: '%s'\n",
-                args->district);
-        return -1;
-    }
-
-    /* 3. Verifica daca directorul exista */
-    struct stat st;
-    if (stat(args->district, &st) < 0) {
-        fprintf(stderr, "Eroare: districtul '%s' nu exista\n", args->district);
-        return -1;
-    }
-    if (!S_ISDIR(st.st_mode)) {
-        fprintf(stderr, "Eroare: '%s' nu este un director\n", args->district);
-        return -1;
-    }
-
-    printf("Stergere district '%s'...\n", args->district);
-
-    /* 4. fork() ca sa cream un proces copil */
-    pid_t pid = fork();
-    if (pid < 0) {
-        perror("fork");
-        return -1;
-    }
-
-    if (pid == 0) {
-        /* COPIL: executa rm -rf <district> */
-        execlp("rm", "rm", "-rf", args->district, (char *)NULL);
-        /* Daca execlp returneaza, a esuat */
-        perror("execlp rm");
-        _exit(EXIT_FAILURE);
-    }
-
-    /* PARINTE: asteapta copilul sa termine */
-    int status;
-    if (waitpid(pid, &status, 0) < 0) {
-        perror("waitpid");
-        return -1;
-    }
-
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        fprintf(stderr, "Eroare: rm -rf a esuat (status=%d)\n",
-                WEXITSTATUS(status));
-        return -1;
-    }
-
-    printf("Director '%s' sters.\n", args->district);
-
-    /* 5. Sterge si symlink-ul active_reports-<district> */
-    char link_name[256];
-    snprintf(link_name, sizeof(link_name), "active_reports-%s", args->district);
-    if (unlink(link_name) == 0) {
-        printf("Symlink '%s' sters.\n", link_name);
-    } else {
-        if (errno != ENOENT) {  /* daca nu e "doesn't exist", e eroare reala */
-            perror("unlink symlink");
-        }
-    }
-
-    /* 6. Logare - dar atentie: logged_district NU mai exista (l-am sters!),
-     * deci scrieam intr-un log central daca am avea unul.
-     * Pentru moment, doar afisam pe stdout. */
-    printf("Operatia 'remove_district %s' completata cu succes.\n",
-           args->district);
-
-    return 0;
-}
-
 int main(int argc, char *argv[]) {
     Args args;
 
@@ -987,7 +878,6 @@ int main(int argc, char *argv[]) {
         case CMD_REMOVE_REPORT:     rc = cmd_remove_report(&args); break;
         case CMD_UPDATE_THRESHOLD:  rc = cmd_update_threshold(&args); break;
         case CMD_FILTER:            rc=cmd_filter(&args); break;
-        case CMD_REMOVE_DISTRICT:   rc = cmd_remove_district(&args); break;
             printf("Comanda --filter va fi implementata cu AI in pasul urmator.\n");
             break;
     }
