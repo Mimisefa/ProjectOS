@@ -11,6 +11,7 @@
 #include <sys/stat.h>   /* stat, lstat, mkdir, chmod, S_IRUSR, etc. */
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <signal.h>
 #include <time.h>       /* time_t, time(), localtime(), strftime() */
 #include <dirent.h>
 #include <errno.h>
@@ -60,6 +61,7 @@ typedef struct {
  * print_usage
  * ========================================== */
  void scan_symlinks(void);
+int notify_monitor(char *out_msg, size_t msg_size);
 void print_usage(const char *prog_name) {
     fprintf(stderr,
         "Utilizare: %s --role <inspector|manager> --user <name> --<command> [args]\n",
@@ -490,8 +492,11 @@ int cmd_add(Args *args) {
 
     printf("Raport %d adaugat cu succes.\n", r.id);
 
-    char action[64];
-    snprintf(action, sizeof(action), "add report id=%d", r.id);
+    char action[256];
+    char notify_status[128];
+    notify_monitor(notify_status, sizeof(notify_status));
+    printf("[notify] %s\n", notify_status);
+    snprintf(action, sizeof(action), "add report id=%d | %s", r.id, notify_status);
     write_log(args->district,
               args->role == ROLE_MANAGER ? "manager" : "inspector",
               args->user, action);
@@ -968,6 +973,45 @@ int cmd_remove_district(Args *args) {
     printf("Operatia 'remove_district %s' completata cu succes.\n",
            args->district);
 
+    return 0;
+}
+
+/* ==========================================================
+ * notify_monitor - notifica procesul monitor_reports cu SIGUSR1
+ * Citeste PID din .monitor_pid, trimite SIGUSR1 cu kill().
+ * Returneaza 0 la succes, -1 la orice eroare.
+ * out_msg trebuie sa aiba minim 128 bytes.
+ * ========================================== */
+int notify_monitor(char *out_msg, size_t msg_size) {
+    int fd = open(".monitor_pid", O_RDONLY);
+    if (fd < 0) {
+        snprintf(out_msg, msg_size,
+                 "monitor could NOT be informed: no .monitor_pid file");
+        return -1;
+    }
+    char buf[32];
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) {
+        snprintf(out_msg, msg_size,
+                 "monitor could NOT be informed: empty .monitor_pid");
+        return -1;
+    }
+    buf[n] = 0;
+    pid_t monitor_pid = (pid_t)atoi(buf);
+    if (monitor_pid <= 0) {
+        snprintf(out_msg, msg_size,
+                 "monitor could NOT be informed: invalid PID");
+        return -1;
+    }
+    if (kill(monitor_pid, SIGUSR1) < 0) {
+        snprintf(out_msg, msg_size,
+                 "monitor could NOT be informed: kill failed: %s",
+                 strerror(errno));
+        return -1;
+    }
+    snprintf(out_msg, msg_size,
+             "monitor notified (PID %d, SIGUSR1)", (int)monitor_pid);
     return 0;
 }
 
