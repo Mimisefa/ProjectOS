@@ -19,3 +19,7 @@ active_reports-*
 # Phase 2 - executabil monitor
 monitor_reports
 .monitor_pid
+
+# Fisiere backup
+*.backup
+*.backup2
