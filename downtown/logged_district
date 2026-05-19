@@ -1,0 +1,25 @@
+[2026-04-27 01:59:10] role=manager user=alice action=add report id=1
+[2026-04-27 02:15:54] role=inspector user=bob action=list
+[2026-04-27 02:21:13] role=inspector user=bob action=add report id=2
+[2026-04-27 02:22:36] role=manager user=alice action=add report id=3
+[2026-04-27 02:22:57] role=inspector user=bob action=list
+[2026-04-27 02:31:14] role=inspector user=bob action=list
+[2026-04-27 02:31:32] role=manager user=alice action=view report id=2
+[2026-04-27 02:31:57] role=inspector user=bob action=view report id=3
+[2026-04-27 02:38:38] role=inspector user=bob action=list
+[2026-04-27 02:43:55] role=manager user=alice action=view report id=2
+[2026-04-27 02:44:47] role=inspector user=bob action=list
+[2026-04-27 02:45:03] role=manager user=alice action=view report id=1
+[2026-04-27 02:45:17] role=inspector user=bob action=list
+[2026-04-27 02:49:14] role=manager user=alice action=remove report id=2
+[2026-04-27 02:49:49] role=inspector user=bob action=list
+[2026-04-27 02:50:04] role=manager user=alice action=remove report id=1
+[2026-04-27 02:50:11] role=inspector user=bob action=list
+[2026-04-27 02:50:31] role=manager user=alice action=remove report id=3
+[2026-04-27 02:50:36] role=inspector user=bob action=list
+[2026-04-27 02:52:39] role=inspector user=bob action=add report id=1
+[2026-04-27 03:00:13] role=manager user=alice action=update_threshold value=3
+[2026-04-27 03:04:03] role=manager user=alice action=update_threshold value=2
+[2026-04-27 03:26:34] role=manager user=alice action=update_threshold value=3
+[2026-05-06 19:47:27] role=manager user=alice action=add report id=2 | monitor notified (PID 804, SIGUSR1)
+[2026-05-06 20:03:02] role=manager user=alice action=add report id=3 | monitor notified (PID 875, SIGUSR1)

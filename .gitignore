@@ -1,5 +1,8 @@
-# Executabilul compilat
+# Executabile compilate (se genereaza din sursa)
 city_manager
+monitor_reports
+city_hub
+scorer
 
 # Fisiere obiect
 *.o
@@ -8,18 +11,9 @@ city_manager
 *.swp
 *~
 
-# Datele generate de program la rulare
-downtown/
-*/reports.dat
-*/district.cfg
-*/logged_district
-active_reports-*
-.monitor_pid
-
-# Phase 2 - executabil monitor
-monitor_reports
-.monitor_pid
-
 # Fisiere backup
 *.backup
 *.backup2
+
+# PID file generat la rulare
+.monitor_pid
