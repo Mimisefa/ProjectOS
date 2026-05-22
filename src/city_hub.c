@@ -17,10 +17,13 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/wait.h>
+#include <signal.h>
 #include <sys/stat.h>
 
 #define MAX_DISTRICTS 16
 #define BUF_SIZE 4096
+
+void hub_mon_main(void);
 
 int district_exists(const char *district) {
     struct stat st;
@@ -99,6 +102,99 @@ void cmd_calculate_scores(char *districts[], int count) {
     printf("\n==============================================\n\n");
 }
 
+/* ==========================================
+ * hub_mon_main - rulat in procesul copil dupa fork() la start_monitor
+ *
+ * 1. Creeaza un pipe
+ * 2. Face fork si in copil lanseaza monitor_reports cu execlp,
+ *    redirectand stdout-ul lui catre capatul de scriere al pipe-ului (dup2)
+ * 3. In parinte (hub_mon) citeste mesajele structurate din pipe,
+ *    linie cu linie, si le afiseaza utilizatorului
+ * 4. Cand monitorul se inchide, afiseaza un mesaj specific
+ * ========================================== */
+void hub_mon_main(void) {
+    int pipe_fd[2];
+
+    if (pipe(pipe_fd) < 0) {
+        perror("hub_mon: pipe");
+        _exit(EXIT_FAILURE);
+    }
+
+    pid_t monitor_pid = fork();
+    if (monitor_pid < 0) {
+        perror("hub_mon: fork");
+        _exit(EXIT_FAILURE);
+    }
+
+    if (monitor_pid == 0) {
+        /* COPIL: devine monitor_reports */
+        close(pipe_fd[0]);  /* nu citim */
+        if (dup2(pipe_fd[1], STDOUT_FILENO) < 0) {
+            perror("hub_mon: dup2");
+            _exit(EXIT_FAILURE);
+        }
+        close(pipe_fd[1]);
+
+        execlp("./monitor_reports", "monitor_reports", (char *)NULL);
+        perror("hub_mon: execlp monitor_reports");
+        _exit(EXIT_FAILURE);
+    }
+
+    /* PARINTE (hub_mon): citeste mesajele din pipe */
+    close(pipe_fd[1]);  /* nu scriem */
+
+    char buf[BUF_SIZE];
+    char line[BUF_SIZE];
+    size_t line_len = 0;
+
+    fprintf(stderr, "\n[hub_mon] monitor pornit (PID %d), citesc mesajele...\n",
+            (int)monitor_pid);
+    fflush(stderr);
+
+    /* Citim caracter cu caracter pana la newline ca sa formam linii complete */
+    ssize_t n;
+    while ((n = read(pipe_fd[0], buf, sizeof(buf))) > 0) {
+        for (ssize_t i = 0; i < n; i++) {
+            if (buf[i] == '\n' || line_len >= sizeof(line) - 1) {
+                line[line_len] = '\0';
+                /* Avem o linie completa - afisam */
+                fprintf(stderr, "[hub_mon] %s\n", line);
+                fflush(stderr);
+
+                /* Daca e mesaj de ERROR sau EXIT, monitorul s-a terminat */
+                if (strstr(line, "[ERROR]") != NULL) {
+                    fprintf(stderr,
+                        "[hub_mon] monitorul a raportat eroare; ies.\n");
+                    fflush(stderr);
+                }
+                if (strstr(line, "[EXIT]") != NULL) {
+                    fprintf(stderr,
+                        "[hub_mon] monitorul s-a inchis curat.\n");
+                    fflush(stderr);
+                }
+
+                line_len = 0;
+            } else {
+                line[line_len++] = buf[i];
+            }
+        }
+    }
+
+    /* Pipe inchis = monitorul s-a terminat */
+    close(pipe_fd[0]);
+
+    /* Asteptam terminarea monitorului */
+    int status;
+    waitpid(monitor_pid, &status, 0);
+
+    fprintf(stderr,
+        "[hub_mon] monitor terminat (exit status %d). hub_mon iese.\n",
+        WEXITSTATUS(status));
+    fflush(stderr);
+
+    _exit(EXIT_SUCCESS);
+}
+
 void print_help(void) {
     printf("Comenzi disponibile:\n");
     printf("  start_monitor                    - porneste monitorul de rapoarte\n");
@@ -145,7 +241,10 @@ int main(void) {
             cmd_calculate_scores(&tokens[1], ntokens - 1);
         }
         else if (strcmp(tokens[0], "start_monitor") == 0) {
-            printf("start_monitor va fi implementat in etapa urmatoare.\n");
+            pid_t hub_pid = fork();
+            if (hub_pid < 0) { perror("fork"); continue; }
+            if (hub_pid == 0) { hub_mon_main(); _exit(0); }
+            printf("hub_mon pornit (PID %d). Mesajele monitorului apar mai jos.\n", (int)hub_pid);
         }
         else {
             printf("Comanda necunoscuta: '%s'. Scrie 'help'.\n", tokens[0]);
